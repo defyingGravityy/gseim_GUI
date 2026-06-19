@@ -1,0 +1,45 @@
+title: boost converter
+begin_circuit
+   eelement name=VS type=vsrc_dc  p=A  n=0  vdc=10
+   eelement name=L  type=l        p=A  n=B  l= 1.0000E-04 i0=1
+   eelement name=S  type=switch_1 p=B  n=0  x=g1 r_on=0.1m r_off=10M
+   eelement name=D  type=diode_r  p=B  n=C  r_on=0.1m r_off=10M
+   eelement name=C  type=c        p=C  n=0  c=3300u
+   eelement name=R  type=r        p=C  n=0  r=5
+
+   xelement name=clock1 type=clock_1 y=g1 D=0.5 f_hz=1k
++     delta1=1u delta2=1u
+
+   ref_node=0
+   output skip_write_cctfile
+   outvar: IL=i_of_L
+   outvar: IS=i_of_S
+   outvar: ID=i_of_D
+   outvar: IC=i_of_C
+   outvar: IR=i_of_R
+   outvar: v_out=v_of_R
+   outvar: clock=y_of_clock1
+end_circuit
+begin_solve
+   solve_type=ssw
+   initial_sol=initialize
+   method: algorithm_trns=backward_euler
+
+   method: nr_check_spice=yes
+   method: nr_spice_abstol=1.0e-6
+   method: nr_spice_vntol=1.0e-3
+   method: write_trns_progress=no
+   method: write_ss_progress=no
+
+   method: ss_frequency=1k
+   method: ss_period_mult_plot=2
+   method: ss_ndiv=500
+   method: ss_nr_eps_rhs=1e-7
+   method: t_start=0
+
+   begin_output
+     filename=Animation_boost_1.dat
+     variables: IL IS ID IC IR v_out clock
+   end_output
+end_solve
+end_cf
