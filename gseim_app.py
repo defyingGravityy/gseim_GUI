@@ -934,9 +934,9 @@ class MultiPlotWindow(QMainWindow):
         self.setWindowTitle("Multi-Plot  vs  " + x_label)
 
         n = len(all_series)
-        self.fig    = Figure(figsize=(7, 2.5*n), tight_layout=True)
+        self.fig    = Figure(figsize=(7, 2.5*n))
         self.canvas = FigureCanvas(self.fig)
-        self.fig.subplots_adjust(hspace=0.05)
+        self.fig.subplots_adjust(hspace=0.0)
 
         axes = []
         for i, (y, style, _side) in enumerate(all_series):
@@ -955,8 +955,9 @@ class MultiPlotWindow(QMainWindow):
             if g.enabled:
                 ax.grid(color=g.color, linestyle=g.line_style,
                         linewidth=g.width, which=g.which, axis=g.axis)
-            ax.ticklabel_format(axis="y", style="sci",
-                                scilimits=(-2, 2), useMathText=True)
+            if style.multi_scale != "log":
+                ax.ticklabel_format(axis="y", style="sci",
+                                    scilimits=(-2, 2), useMathText=True)
             ax.legend(loc="best", fontsize=9)
             ax.label_outer()  
             axes.append(ax)
@@ -1499,9 +1500,9 @@ class MainWindow(QMainWindow):
 
         win = QMainWindow()
         win.setWindowTitle("Power Analysis")
-        fig = Figure(figsize=(7, 9), tight_layout=True)
+        fig = Figure(figsize=(7, 9))
         canvas = FigureCanvas(fig)
-        fig.subplots_adjust(hspace=0.05)
+        fig.subplots_adjust(hspace=0.0)
 
         ax1 = fig.add_subplot(3, 1, 1)
         ax1.plot(x, voltage, color="dodgerblue",  label=p.v_name)
