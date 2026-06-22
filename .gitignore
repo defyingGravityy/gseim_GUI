@@ -1,2 +1,4 @@
 __pycache__/
 .ip.py.swp
+.dat
+*.pyc

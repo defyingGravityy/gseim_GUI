@@ -1490,6 +1490,7 @@ class MainWindow(QMainWindow):
         canvas = FigureCanvas(fig)
         for idx, col in enumerate(all_y):
             ax = fig.add_subplot(n, 1, idx+1)
+            ax.set_axisbelow(True)
             ax.bar(data_f[:, 0], data_f[:, idx+1], width=0.5,
                    color=self.line_styles[col].color)
             ax.set_xlabel("Harmonic index")

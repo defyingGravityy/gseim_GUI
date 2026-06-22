@@ -2,7 +2,9 @@ import sys
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
+
 import numpy as np
+
 
 try:
     from PyQt6 import QtCore, QtWidgets
@@ -17,7 +19,6 @@ try:
         QVBoxLayout, QHBoxLayout, QFormLayout, QFrame,
         QScrollArea,
     )
-
     Checked   = QtCore.Qt.CheckState.Checked
     Unchecked = QtCore.Qt.CheckState.Unchecked
     UserCheckable   = QtCore.Qt.ItemFlag.ItemIsUserCheckable
@@ -52,7 +53,6 @@ except ImportError:
     ScrollBarAlwaysOff = QtCore.Qt.ScrollBarAlwaysOff
     NoFrame = QFrame.NoFrame
 
-# Matplotlib inside Qt 
 from matplotlib.figure import Figure
 from matplotlib.ticker import MaxNLocator
 try:
@@ -62,179 +62,95 @@ except ImportError:
     from matplotlib.backends.backend_qt5agg import (
         FigureCanvas, NavigationToolbar2QT as NavToolbar)
 
+#  Our own parsing module 
+from gseim_io import parse_in_file, load_dat, column_labels, GseimInFileError
 
-@dataclass
-class OutputBlock:
-    dat_filename: str           
-    variables: list[str] = field(default_factory=list)  
-    dat_path: Path | None = None  
-
-
-class GseimInFileError(ValueError):
-    """Raised when a .in file can't be parsed the way we expect."""
-
-
-def parse_in_file(in_file_path) -> tuple[int, list[OutputBlock]]:
-    in_file_path = Path(in_file_path).expanduser()
-    if not in_file_path.exists():
-        raise GseimInFileError(f".in file not found: {in_file_path}")
-
-    lines = in_file_path.read_text().splitlines()
-    base_dir = in_file_path.parent
-
-    n_solve_blocks = sum(1 for ln in lines if "begin_solve" in ln)
-
-    output_blocks: list[OutputBlock] = []
-    i = 0
-    n = len(lines)
-    while i < n:
-        line = lines[i]
-        if "begin_output" in line:
-            block_start = i
-            next_line = lines[i + 1] if i + 1 < n else ""
-            if ".dat" in next_line:
-                eq_pos = next_line.index("=")
-                dat_end = next_line.index(".dat") + len(".dat")
-                dat_filename = next_line[eq_pos + 1:dat_end].strip()
-
-                j = i + 1
-                variables: list[str] = []
-                while j < n and "end_output" not in lines[j]:
-                    if "variables:" in lines[j]:
-                        after_colon = lines[j].split(":", 1)[1]
-                        variables = after_colon.strip().split()
-                    j += 1
-                if j >= n:
-                    raise GseimInFileError(
-                        f"begin_output at line {block_start + 1} has no matching end_output"
-                    )
-
-                output_blocks.append(OutputBlock(
-                    dat_filename=dat_filename,
-                    variables=variables,
-                    dat_path=(base_dir / dat_filename).resolve(),
-                ))
-                i = j
-        i += 1
-
-    return n_solve_blocks, output_blocks
-
-
-def load_dat(dat_path) -> np.ndarray:
-    dat_path = Path(dat_path).expanduser()
-    if not dat_path.exists():
-        raise FileNotFoundError(f".dat file not found: {dat_path}")
-
-    data = np.loadtxt(dat_path)
-    if data.size == 0:
-        raise ValueError(f".dat file has no data: {dat_path}")
-    if data.ndim == 1:
-        data = data.reshape(1, -1)
-    return data
-
-def column_labels(variables: list[str], n_col: int) -> list[str]:
-    labels = list(variables)
-    if len(labels) == n_col - 1:
-        labels.insert(0, "time")
-    if len(labels) != n_col:
-        labels = [f"col{i}" for i in range(n_col)]
-    return labels
 
 class TrimmedToolbar(NavToolbar):
     """Keep only the four toolbar buttons we actually need."""
-    # toolitems = [t for t in NavToolbar.toolitems
-                #  if t[0] in ("Home", "Pan", "Zoom", "Save")]
-    toolitems = NavToolbar.toolitems 
+    toolitems = NavToolbar.toolitems
+
+
 
 def fourier_coeff(t, x, t_start, t_end, n_fourier):
+    coeff              = [0.0] * n_fourier
+    sum_fourier_real   = [0.0] * n_fourier
+    sum_fourier_imag   = [0.0] * n_fourier
+    sum_fourier_mag    = [0.0] * n_fourier
+    omg                = [0.0] * n_fourier
+    sum_rms_1          = 0.0
 
-     coeff = [0.0]*n_fourier
-     sum_fourier_real = [0.0]*n_fourier
-     sum_fourier_imag = [0.0]*n_fourier
-     sum_fourier_mag = [0.0]*n_fourier
-     omg = [0.0]*n_fourier
-     sum_rms_1 = 0.0
+    T    = t_end - t_start
+    a2   = 0.5 * T
+    for i in range(n_fourier):
+        omg[i] = 2.0 * float(i) * np.pi / T
 
-     T = t_end - t_start
-     a2 = 0.5*T
-     f_hz = 1.0/T
-     for i in range(n_fourier):
-         omg[i] = 2.0*float(i)*np.pi/T
+    t_last = t[0]
+    y_last = x[0]
+    n = len(t)
 
-     t_last = t[0];
-     y_last = x[0];
+    for i in range(n):
+        t0 = t[i]
+        y0 = x[i]
+        if t_last <= t_end:
+            if t_last >= t_start:
+                if t0 <= t_end:
+                    dt = t0 - t_last
+                    for j in range(n_fourier):
+                        wt1 = omg[j] * t_last
+                        wt2 = omg[j] * t0
+                        sum_fourier_real[j] += 0.5*dt*(np.cos(wt1)*y_last + np.cos(wt2)*y0)
+                        sum_fourier_imag[j] += 0.5*dt*(np.sin(wt1)*y_last + np.sin(wt2)*y0)
+                    sum_rms_1 += 0.5 * dt * (y_last**2 + y0**2)
+                else:
+                    y1 = y_last + ((y0-y_last)/(t0-t_last)) * (t_end-t_last)
+                    dt = t_end - t_last
+                    for j in range(n_fourier):
+                        wt1 = omg[j] * t_last
+                        wt2 = omg[j] * t_end
+                        sum_fourier_real[j] += 0.5*dt*(np.cos(wt1)*y_last + np.cos(wt2)*y1)
+                        sum_fourier_imag[j] += 0.5*dt*(np.sin(wt1)*y_last + np.sin(wt2)*y1)
+                    sum_rms_1 += 0.5 * dt * (y_last**2 + y1**2)
+            else:
+                if t0 > t_start:
+                    y1 = y_last + ((y0-y_last)/(t0-t_last)) * (t_start-t_last)
+                    dt = t0 - t_start
+                    for j in range(n_fourier):
+                        wt1 = omg[j] * t_start
+                        wt2 = omg[j] * t0
+                        sum_fourier_real[j] += 0.5*dt*(np.cos(wt1)*y1 + np.cos(wt2)*y0)
+                        sum_fourier_imag[j] += 0.5*dt*(np.sin(wt1)*y1 + np.sin(wt2)*y0)
+                    sum_rms_1 += 0.5 * dt * (y1**2 + y0**2)
+        t_last = t0
+        y_last = y0
 
-     n = len(t)
+    for i in range(n_fourier):
+        b1 = sum_fourier_real[i]
+        b2 = sum_fourier_imag[i]
+        sum_fourier_mag[i] = np.sqrt(b1**2 + b2**2) / a2
 
-     for i in range(n):
-         t0 = t[i]
-         y0 = x[i]
+    coeff[0] = 0.5 * sum_fourier_mag[0]
+    for i in range(1, n_fourier):
+        coeff[i] = sum_fourier_mag[i]
 
-         if t_last <= t_end:
-             if t_last >= t_start:
-                 if t0 <= t_end:
-                     delta_t = t0 - t_last
-                     for j in range(n_fourier):
-                         wt1 = omg[j]*t_last
-                         wt2 = omg[j]*t0
-                         z1 = y_last
-                         z2 = y0
-                         sum_fourier_real[j] += 0.5*delta_t*(np.cos(wt1)*z1 + np.cos(wt2)*z2)
-                         sum_fourier_imag[j] += 0.5*delta_t*(np.sin(wt1)*z1 + np.sin(wt2)*z2)
-                     sum_rms_1 += 0.5*delta_t*(y_last*y_last + y0*y0)
-                 else:
-                     y1 = y_last + ((y0-y_last)/(t0-t_last))*(t_end-t_last)
-                     delta_t = t_end-t_last
-                     for j in range(n_fourier):
-                         wt1 = omg[j]*t_last
-                         wt2 = omg[j]*t_end
-                         z1 = y_last
-                         z2 = y1
-                         sum_fourier_real[j] += 0.5*delta_t*(np.cos(wt1)*z1 + np.cos(wt2)*z2)
-                         sum_fourier_imag[j] += 0.5*delta_t*(np.sin(wt1)*z1 + np.sin(wt2)*z2)
-                     sum_rms_1 += 0.5*delta_t*(y_last*y_last + y1*y1)
-             else:
-                 if t0 > t_start:
-                     y1 = y_last + ((y0-y_last)/(t0-t_last))*(t_start-t_last)
-                     delta_t = t0-t_start
-                     for j in range(n_fourier):
-                         wt1 = omg[j]*t_start
-                         wt2 = omg[j]*t0
-                         z1 = y1
-                         z2 = y0
-                         sum_fourier_real[j] += 0.5*delta_t*(np.cos(wt1)*z1 + np.cos(wt2)*z2)
-                         sum_fourier_imag[j] += 0.5*delta_t*(np.sin(wt1)*z1 + np.sin(wt2)*z2)
-                     sum_rms_1 += 0.5*delta_t*(y1*y1 + y0*y0)
-         t_last = t0
-         y_last = y0
-
-     for i in range(n_fourier):
-         b1 = sum_fourier_real[i]
-         b2 = sum_fourier_imag[i]
-         sum_fourier_mag[i] = np.sqrt((b1*b1)+(b2*b2))/a2
-
-     coeff[0] = 0.5*sum_fourier_mag[0]
-     for i in range(1, n_fourier):
-         coeff[i] = sum_fourier_mag[i]
-
-     arg1 = 2.0*(sum_rms_1/T) - 2.0*coeff[0]**2 - coeff[1]**2
-     thd = np.sqrt(arg1)/coeff[1]
-
-     return coeff, thd
+    arg1 = 2.0*(sum_rms_1/T) - 2.0*coeff[0]**2 - coeff[1]**2
+    thd  = np.sqrt(max(arg1, 0.0)) / coeff[1]   # max(...,0) avoids sqrt of tiny negatives
+    return coeff, thd
 
 
 @dataclass
 class LineStyling:
+    """Visual style for one plotted line."""
     label:      str   = ""
-    line_style: str   = "solid"  
+    line_style: str   = "solid"   # solid / dashed / dotted / dashdot / None
     draw_style: str   = "default" # default / steps-post / steps-pre / steps-mid
     width:      float = 1.0
     color:      str   = "royalblue"
-    marker:     str   = ""       
+    marker:     str   = ""        # "" = no marker, "o", ".", "x", ...
     marker_size:       float = 3.0
     marker_edge_color: str   = "black"
     marker_face_color: str   = "white"
-    multi_scale:  str = "linear"  
+    multi_scale:  str = "linear"  # linear or log (only used in multiplot mode)
 
 
 @dataclass
@@ -255,9 +171,19 @@ class GridSettings:
 
 
 @dataclass
-class MultiPlotSettings:
-    enabled: bool = False   # if True, stack one subplot per Y variable
+class MultiPlotPanel:
+    x_col:       int  = 0
+    y_left:      list = field(default_factory=list)    # column indices, left axis
+    y_right:     list = field(default_factory=list)    # column indices, right axis
+    left_scale:  str  = "linear"   # linear / log
+    right_scale: str  = "linear"
 
+
+@dataclass
+class MultiPlotSettings:
+    enabled: bool = False
+    n_plots: int  = 1
+    panels:  list = field(default_factory=list)   # list[MultiPlotPanel], one per subplot
 
 @dataclass
 class FourierSettings:
@@ -287,11 +213,11 @@ class AxesSettings:
     # X axis
     x_scale: str   = "linear"
     x_label: str   = ""
-    x_min:   str   = ""     
+    x_min:   str   = ""     # stored as strings so empty = auto-range
     x_max:   str   = ""
-    x_sn_lo: int   = -3    
-    x_sn_hi: int   =  3     
-    x_sn:    bool  = True  
+    x_sn_lo: int   = -3     # scientific notation kicks in below 10^x_sn_lo
+    x_sn_hi: int   =  3     #  ... or above 10^x_sn_hi
+    x_sn:    bool  = True   # use scientific notation at all?
     # Left Y axis
     y_scale: str   = "linear"
     y_label: str   = ""
@@ -300,6 +226,7 @@ class AxesSettings:
     y_sn_lo: int   = -3
     y_sn_hi: int   =  3
     y_sn:    bool  = True
+    # Right Y axis  (suffix 2)
     y_scale2: str  = "linear"
     y_label2: str  = ""
     y_min2:   str  = ""
@@ -324,15 +251,13 @@ class LegendSettings:
 @dataclass
 class TickSettings:
     enabled:   bool  = True
-    direction: str   = "out"   
+    direction: str   = "out"    # in / out / inout
     rotation:  int   = 0
     positions: list  = field(default_factory=list)
     labels:    list  = field(default_factory=list)
 
-
-#HELPER: base class for all popup dialogs
-
 class BasePopup(QMainWindow):
+
     def __init__(self, title, parent=None):
         super().__init__(parent)
         self.setWindowTitle(title)
@@ -377,7 +302,7 @@ class BasePopup(QMainWindow):
         pass
 
 
-#POPUP DIALOGS
+#  POPUP DIALOGS
 
 def _color_button(initial_color: str) -> tuple:
     state = {"color": QColor(initial_color)}
@@ -401,12 +326,13 @@ def _color_button(initial_color: str) -> tuple:
 
 
 class LinePropPopup(BasePopup):
+
     def __init__(self, main_win):
         super().__init__("Line Properties")
         self.main_win = main_win
-        self.resize(420, 280)
+        self.resize(550, 400)
 
-        # variable picker 
+        #  variable picker 
         self.var_combo = QComboBox()
         self.var_combo.currentIndexChanged.connect(self._var_changed)
         self.content_layout.addRow("Variable:", self.var_combo)
@@ -432,7 +358,7 @@ class LinePropPopup(BasePopup):
         self.line_color_btn, self._line_color = _color_button("royalblue")
         self.content_layout.addRow("Line color:", self.line_color_btn)
 
-        #  marker
+        #  marker 
         self.marker_combo = QComboBox()
         for m in ("", ".", "o", "x", "+", "D", "d", "s", "*", "v", "^", "<", ">"):
             self.marker_combo.addItem(m)
@@ -448,7 +374,7 @@ class LinePropPopup(BasePopup):
         self.face_color_btn, self._face_color = _color_button("white")
         self.content_layout.addRow("Marker face color:", self.face_color_btn)
 
-        # multi-plot scale
+        #  multi-plot scale 
         self.multi_scale_combo = QComboBox()
         self.multi_scale_combo.addItem("linear")
         self.multi_scale_combo.addItem("log")
@@ -480,7 +406,7 @@ class LinePropPopup(BasePopup):
         self.line_width.setText(str(s.width))
         self._line_color["color"] = QColor(s.color)
         px = QPixmap(16, 16); px.fill(self._line_color["color"])
-        self.line_color_btn.setIcon(QIcon(px))
+        self.line_color_btn.setIcon(QIcon(px))  
         self.marker_combo.setCurrentText(s.marker)
         self.marker_size.setText(str(s.marker_size))
         self._edge_color["color"] = QColor(s.marker_edge_color)
@@ -513,39 +439,177 @@ class MultiPlotPopup(BasePopup):
     def __init__(self, main_win):
         super().__init__("Multi-Plot")
         self.main_win = main_win
-        self.resize(260, 120)
-        self.check = QCheckBox()
-        self.content_layout.addRow("Stack subplots:", self.check)
+        self.resize(750, 700)
+        self.panel_blocks = []   # list of dicts holding each panel's widgets
+
+        self.enable_check = QCheckBox()
+        #self.content_layout.addRow("Enabled:", self.enable_check)
+
+        n_row = QWidget()
+        n_layout = QHBoxLayout(n_row)
+        n_layout.setContentsMargins(0, 0, 0, 0)
+        self.n_edit = QLineEdit("1")
+        self.n_edit.setFixedWidth(50)
+        set_btn = QPushButton("Set")
+        set_btn.clicked.connect(lambda: self._rebuild_panels())
+        n_layout.addWidget(self.n_edit)
+        n_layout.addWidget(set_btn)
+        self.content_layout.addRow("Number of plots:", n_row)
+
+        self.panels_area = QScrollArea()
+        self.panels_area.setWidgetResizable(True)
+        self.panels_container = QWidget()
+        self.panels_layout = QVBoxLayout(self.panels_container)
+        self.panels_area.setWidget(self.panels_container)
+        self.content_layout.addRow(self.panels_area)
+
+    def _make_panel_block(self, index):
+        box = QtWidgets.QGroupBox(f"Plot {index+1}")
+        v = QVBoxLayout(box)
+
+        v.addWidget(QLabel("X axis:"))
+        x_list = QListWidget()
+        x_list.setSelectionMode(SingleSelection)
+        x_list.setMaximumHeight(80)
+        v.addWidget(x_list)
+
+        v.addWidget(QLabel("Y axis  (L = left,  R = right):"))
+        y_table = QTableWidget(0, 3)
+        y_table.setHorizontalHeaderLabels(["L", "R", "Variable"])
+        h = y_table.horizontalHeader()
+        h.setSectionResizeMode(0, ResizeToContents)
+        h.setSectionResizeMode(1, ResizeToContents)
+        h.setSectionResizeMode(2, StretchLast)
+        y_table.setMaximumHeight(120)
+        v.addWidget(y_table)
+
+        scale_row = QWidget()
+        sl = QHBoxLayout(scale_row)
+        sl.setContentsMargins(0, 0, 0, 0)
+        sl.addWidget(QLabel("Left scale:"))
+        left_scale = QComboBox(); left_scale.addItems(["linear", "log"])
+        sl.addWidget(left_scale)
+        sl.addWidget(QLabel("Right scale:"))
+        right_scale = QComboBox(); right_scale.addItems(["linear", "log"])
+        sl.addWidget(right_scale)
+        v.addWidget(scale_row)
+
+        for lbl in self.main_win.labels:
+            x_list.addItem(QListWidgetItem(lbl))
+            row = y_table.rowCount()
+            y_table.insertRow(row)
+            for col in (0, 1):
+                item = QTableWidgetItem()
+                item.setFlags(UserCheckable | ItemEnabled)
+                item.setCheckState(Unchecked)
+                y_table.setItem(row, col, item)
+            name_item = QTableWidgetItem(lbl)
+            name_item.setFlags(ItemEnabled)
+            y_table.setItem(row, 2, name_item)
+        if x_list.count():
+            x_list.setCurrentRow(0)
+
+        def y_changed(item, table=y_table):
+            if item.column() not in (0, 1):
+                return
+            if item.checkState() == Checked:
+                other = table.item(item.row(), 1 - item.column())
+                if other and other.checkState() == Checked:
+                    other.setCheckState(Unchecked)
+        y_table.itemChanged.connect(y_changed)
+
+        return {"box": box, "x_list": x_list, "y_table": y_table,
+                "left_scale": left_scale, "right_scale": right_scale}
+
+    def _rebuild_panels(self, restore_from=None):
+        try:
+            n = max(1, int(self.n_edit.text()))
+        except ValueError:
+            n = 1
+        self.n_edit.setText(str(n))
+
+        while self.panels_layout.count():
+            w = self.panels_layout.takeAt(0).widget()
+            if w: w.setParent(None)
+        self.panel_blocks = []
+
+        for i in range(n):
+            block = self._make_panel_block(i)
+            self.panels_layout.addWidget(block["box"])
+            self.panel_blocks.append(block)
+
+            if restore_from and i < len(restore_from):
+                p = restore_from[i]
+                if 0 <= p.x_col < block["x_list"].count():
+                    block["x_list"].setCurrentRow(p.x_col)
+                for r in p.y_left:
+                    if r < block["y_table"].rowCount():
+                        block["y_table"].item(r, 0).setCheckState(Checked)
+                for r in p.y_right:
+                    if r < block["y_table"].rowCount():
+                        block["y_table"].item(r, 1).setCheckState(Checked)
+                block["left_scale"].setCurrentText(p.left_scale)
+                block["right_scale"].setCurrentText(p.right_scale)
+        
+        panel_height = 250                     
+        base_height  = 150                     
+        wanted = base_height + n * panel_height
+        max_h  = int(self.screen().availableGeometry().height() * 0.85)
+        self.resize(580, min(wanted, max_h))
 
     def load_settings(self):
-        self.check.setChecked(self.main_win.multiplot.enabled)
+        mw = self.main_win
+        #self.enable_check.setChecked(mw.multiplot.enabled)
+        self.n_edit.setText(str(mw.multiplot.n_plots or 1))
+        self._rebuild_panels(restore_from=mw.multiplot.panels)
 
     def apply(self):
         mw = self.main_win
-        if self.check.isChecked() and mw.x_col != 0:
-            QMessageBox.warning(self, "Multi-Plot", "X axis must be 'time' for multi-plot mode.")
-            self.check.setChecked(False)
-            return
-        mw.multiplot.enabled = self.check.isChecked()
+        #mw.multiplot.enabled = self.enable_check.isChecked()
+        #if not mw.multiplot.enabled:
+            #return
+
+        panels = []
+        for block in self.panel_blocks:
+            x_col = block["x_list"].currentRow()
+            if x_col < 0:
+                QMessageBox.warning(self, "Multi-Plot", "Every plot needs an X axis selected.")
+                return
+            y_left, y_right = [], []
+            for r in range(block["y_table"].rowCount()):
+                if block["y_table"].item(r, 0).checkState() == Checked:
+                    y_left.append(r)
+                elif block["y_table"].item(r, 1).checkState() == Checked:
+                    y_right.append(r)
+            if not y_left and not y_right:
+                QMessageBox.warning(self, "Multi-Plot", "Every plot needs at least one Y variable.")
+                return
+            panels.append(MultiPlotPanel(
+                x_col=x_col, y_left=y_left, y_right=y_right,
+                left_scale=block["left_scale"].currentText(),
+                right_scale=block["right_scale"].currentText()))
+
+        mw.multiplot.n_plots = len(panels)
+        mw.multiplot.panels  = panels
 
 
 class FourierPopup(BasePopup):
     def __init__(self, main_win):
         super().__init__("Fourier Analysis")
         self.main_win = main_win
-        self.resize(300, 200)
-        self.check = QCheckBox()
+        self.resize(420, 280)
+        #self.check = QCheckBox()
         self.n_edit  = QLineEdit("10")
         self.t0_edit = QLineEdit("0")
         self.t1_edit = QLineEdit("0")
-        self.content_layout.addRow("Enabled:", self.check)
+        #self.content_layout.addRow("Enabled:", self.check)
         self.content_layout.addRow("Number of harmonics:", self.n_edit)
         self.content_layout.addRow("t start:", self.t0_edit)
         self.content_layout.addRow("t end:",   self.t1_edit)
 
     def load_settings(self):
         f = self.main_win.fourier
-        self.check.setChecked(f.enabled)
+        #self.check.setChecked(f.enabled)
         self.n_edit.setText(str(f.n_fourier))
         self.t0_edit.setText(str(f.t_start))
         self.t1_edit.setText(str(f.t_end))
@@ -553,9 +617,9 @@ class FourierPopup(BasePopup):
     def apply(self):
         mw = self.main_win
         f  = mw.fourier
-        f.enabled   = self.check.isChecked()
-        if not f.enabled:
-            return
+        #f.enabled   = self.check.isChecked()
+        #if not f.enabled:
+            #return
         t0 = float(self.t0_edit.text() or "0")
         t1 = float(self.t1_edit.text() or "0")
         if t0 >= t1:
@@ -564,9 +628,11 @@ class FourierPopup(BasePopup):
         if mw.x_col != 0:
             QMessageBox.warning(self, "Fourier", "X axis must be 'time' for Fourier analysis.")
             return
+        mw._enforce_fourier_single_y()
         f.n_fourier = int(self.n_edit.text() or "10")
         f.t_start   = t0
         f.t_end     = t1
+        # do the actual computation and save results to a file next to the .dat
         mw._run_fourier()
 
 
@@ -575,7 +641,7 @@ class AvgRmsPopup(BasePopup):
     def __init__(self, main_win):
         super().__init__("Average / RMS")
         self.main_win = main_win
-        self.resize(280, 160)
+        self.resize(400, 220)
         self.avg_check = QCheckBox()
         self.rms_check = QCheckBox()
         self.period_edit = QLineEdit()
@@ -609,15 +675,19 @@ class AvgRmsPopup(BasePopup):
 
 
 class PowerPopup(BasePopup):
+    """
+    Compute per-period power quantities: V_rms, I_rms, P_avg, P_apparent, power-factor.
+    Pick which column is voltage and which is current.
+    """
     def __init__(self, main_win):
         super().__init__("Power Computation")
         self.main_win = main_win
-        self.resize(300, 180)
+        self.resize(420, 260)
         self.check      = QCheckBox()
         self.v_combo    = QComboBox()
         self.i_combo    = QComboBox()
         self.period_edit = QLineEdit()
-        self.content_layout.addRow("Enabled:",  self.check)
+        #self.content_layout.addRow("Enabled:",  self.check)
         self.content_layout.addRow("Voltage column:", self.v_combo)
         self.content_layout.addRow("Current column:", self.i_combo)
         self.content_layout.addRow("Period:",    self.period_edit)
@@ -625,7 +695,7 @@ class PowerPopup(BasePopup):
     def load_settings(self):
         p  = self.main_win.power
         mw = self.main_win
-        self.check.setChecked(p.enabled)
+        #self.check.setChecked(p.enabled)
         self.v_combo.clear(); self.i_combo.clear()
         for lbl in (mw.labels or []):
             self.v_combo.addItem(lbl)
@@ -639,9 +709,9 @@ class PowerPopup(BasePopup):
     def apply(self):
         mw = self.main_win
         p  = mw.power
-        p.enabled = self.check.isChecked()
-        if not p.enabled:
-            return
+        #p.enabled = self.check.isChecked()
+        #if not p.enabled:
+           # return
         try:
             T = float(self.period_edit.text())
         except ValueError:
@@ -655,11 +725,12 @@ class PowerPopup(BasePopup):
 
 
 class GridPopup(BasePopup):
+    """Show/hide the grid and adjust its appearance."""
     def __init__(self, main_win):
         super().__init__("Grid")
         self.main_win = main_win
-        self.resize(280, 220)
-        self.check      = QCheckBox()
+        self.resize(420, 300)
+        self.check = QCheckBox()
         self.color_btn, self._color = _color_button("lightgrey")
         self.style_combo = QComboBox()
         for s in ("solid", "dashed", "dotted", "dashdot"):
@@ -671,7 +742,7 @@ class GridPopup(BasePopup):
         self.axis_combo = QComboBox()
         for s in ("both", "x", "y"): self.axis_combo.addItem(s)
 
-        self.content_layout.addRow("Show grid:",  self.check)
+
         self.content_layout.addRow("Color:",      self.color_btn)
         self.content_layout.addRow("Line style:", self.style_combo)
         self.content_layout.addRow("Line width:", self.width_edit)
@@ -680,7 +751,7 @@ class GridPopup(BasePopup):
 
     def load_settings(self):
         g = self.main_win.grid
-        self.check.setChecked(g.enabled)
+        #self.check.setChecked(g.enabled)
         self._color["color"] = QColor(g.color)
         px = QPixmap(16,16); px.fill(self._color["color"])
         self.color_btn.setIcon(QIcon(px))
@@ -691,7 +762,7 @@ class GridPopup(BasePopup):
 
     def apply(self):
         g = self.main_win.grid
-        g.enabled    = self.check.isChecked()
+        #g.enabled    = self.check.isChecked()
         g.color      = self._color["color"].name()
         g.line_style = self.style_combo.currentText()
         g.width      = float(self.width_edit.text() or "0.7")
@@ -703,7 +774,7 @@ class AxesPopup(BasePopup):
     def __init__(self, main_win):
         super().__init__("Axes Properties")
         self.main_win = main_win
-        self.resize(380, 420)
+        self.resize(500, 560)
 
         def row(label, widget):
             self.content_layout.addRow(label, widget)
@@ -757,23 +828,23 @@ class TitlePopup(BasePopup):
     def __init__(self, main_win):
         super().__init__("Title")
         self.main_win = main_win
-        self.resize(300, 150)
-        self.check    = QCheckBox()
+        self.resize(420, 220)
+        #self.check    = QCheckBox()
         self.text     = QLineEdit()
         self.loc      = QComboBox(); self.loc.addItems(["center", "left", "right"])
-        self.content_layout.addRow("Show title:", self.check)
+        #self.content_layout.addRow("Show title:", self.check)
         self.content_layout.addRow("Title text:", self.text)
         self.content_layout.addRow("Alignment:",  self.loc)
 
     def load_settings(self):
         t = self.main_win.title
-        self.check.setChecked(t.enabled)
+        #self.check.setChecked(t.enabled)
         self.text.setText(t.text)
         self.loc.setCurrentText(t.loc)
 
     def apply(self):
         t = self.main_win.title
-        t.enabled = self.check.isChecked()
+        #t.enabled = self.check.isChecked()
         t.text    = self.text.text()
         t.loc     = self.loc.currentText()
 
@@ -783,7 +854,7 @@ class LegendPopup(BasePopup):
     def __init__(self, main_win):
         super().__init__("Legend")
         self.main_win = main_win
-        self.resize(300, 260)
+        self.resize(420, 340)
         self.loc      = QComboBox()
         for s in ("best","upper right","upper left","lower right","lower left",
                   "center","upper center","lower center"):
@@ -811,17 +882,17 @@ class LegendPopup(BasePopup):
         l.title    = self.title.text() or None
 
 
-#  PLOT WINDOW 
 
 class PlotWindow(QMainWindow):
 
+    # Colors cycled across lines so each line looks distinct by default
     COLORS = ["royalblue", "tomato", "green", "mediumorchid",
               "peru", "crimson", "lightseagreen", "palevioletred"]
 
     def __init__(self, x, x_label,
-                 left_series,  
-                 right_series, 
-                 settings,     
+                 left_series,   # list of (y_array, LineStyling)
+                 right_series,  # list of (y_array, LineStyling)  — may be empty
+                 settings,      # dict holding all the settings objects
                  parent=None):
         super().__init__(parent)
 
@@ -837,7 +908,7 @@ class PlotWindow(QMainWindow):
 
         ax  = self.fig.add_subplot(111)
         ax2 = ax.twinx()
-        ax2.set_visible(False)   
+        ax2.set_visible(False)   # hide right axis until we actually need it
 
         ci = 0
         collected_lines = []
@@ -878,6 +949,7 @@ class PlotWindow(QMainWindow):
             collected_labels.append(style.label)
             ci += 1
 
+        # Apply axes settings
         a = settings["axes"]
         ax.set_xlabel(a.x_label or x_label)
         ax.set_xscale(a.x_scale)
@@ -929,45 +1001,78 @@ class PlotWindow(QMainWindow):
 
 
 class MultiPlotWindow(QMainWindow):
-    def __init__(self, x, x_label, all_series, settings, parent=None):
-        super().__init__(parent)
-        self.setWindowTitle("Multi-Plot  vs  " + x_label)
 
-        n = len(all_series)
+    def __init__(self, data, labels, line_styles, panels, settings, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Multi-Plot")
+
+        n = len(panels)
         self.fig    = Figure(figsize=(7, 2.5*n))
         self.canvas = FigureCanvas(self.fig)
         self.fig.subplots_adjust(hspace=0.0)
 
+        all_time = all(p.x_col == 0 for p in panels)   # column 0 is 'time' by convention
+
         axes = []
-        for i, (y, style, _side) in enumerate(all_series):
-            ax = self.fig.add_subplot(n, 1, i+1)
-            ax.plot(x, y,
-                    color=style.color, linestyle=style.line_style,
-                    linewidth=style.width, drawstyle=style.draw_style,
-                    marker=style.marker or None,
-                    markersize=style.marker_size,
-                    label=style.label)
-            ax.set_ylabel(style.label)
-            if style.multi_scale == "log":
-                ax.set_yscale("log")
+        shared_ax = None
+        for i, panel in enumerate(panels):
+            ax = self.fig.add_subplot(n, 1, i+1, sharex=shared_ax if all_time else None)
+            if all_time and shared_ax is None:
+                shared_ax = ax
+
+            x = data[:, panel.x_col]
+
+            collected_lines, collected_labels = [], []
+            for col in panel.y_left:
+                style = line_styles[col]
+                ln, = ax.plot(x, data[:, col],
+                              color=style.color, linestyle=style.line_style,
+                              linewidth=style.width, drawstyle=style.draw_style,
+                              marker=style.marker or None, markersize=style.marker_size,
+                              label=style.label)
+                collected_lines.append(ln); collected_labels.append(style.label)
+            ax.set_yscale(panel.left_scale)
+            if panel.y_left:
+                ax.set_ylabel(labels[panel.y_left[0]] if len(panel.y_left) == 1 else "value")
+
+            if panel.y_right:
+                ax2 = ax.twinx()
+                for col in panel.y_right:
+                    style = line_styles[col]
+                    ln, = ax2.plot(x, data[:, col],
+                                   color=style.color, linestyle=style.line_style,
+                                   linewidth=style.width, drawstyle=style.draw_style,
+                                   marker=style.marker or None, markersize=style.marker_size,
+                                   label=style.label)
+                    collected_lines.append(ln); collected_labels.append(style.label)
+                ax2.set_yscale(panel.right_scale)
+                ax2.set_ylabel(labels[panel.y_right[0]] if len(panel.y_right) == 1 else "value")
+
             ax.set_axisbelow(True)
             g = settings["grid"]
             if g.enabled:
                 ax.grid(color=g.color, linestyle=g.line_style,
                         linewidth=g.width, which=g.which, axis=g.axis)
-            if style.multi_scale != "log":
+            if panel.left_scale != "log":
                 ax.ticklabel_format(axis="y", style="sci",
                                     scilimits=(-2, 2), useMathText=True)
-            ax.legend(loc="best", fontsize=9)
-            ax.label_outer()  
+            if collected_labels:
+                ax.legend(collected_lines, collected_labels, loc="best", fontsize=9)
+
+            if all_time:
+                ax.label_outer()          # hide tick labels except on the bottom subplot
+            else:
+                ax.set_xlabel(labels[panel.x_col])   # independent x-axis: always show its label
+
             axes.append(ax)
 
-        if axes:
-            axes[-1].set_xlabel(x_label)
+        if all_time and axes:
+            axes[-1].set_xlabel(labels[0])
 
         t = settings["title"]
         if t.enabled and t.text and axes:
             axes[0].set_title(t.text, loc=t.loc)
+
         central = QWidget()
         layout  = QVBoxLayout(central)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -975,9 +1080,6 @@ class MultiPlotWindow(QMainWindow):
         self.setCentralWidget(central)
         self.addToolBar(TrimmedToolbar(self.canvas, self))
         self.resize(720, 300 * n)
-
-
-# MAIN WINDOW
 
 class MainWindow(QMainWindow):
 
@@ -989,24 +1091,21 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("GSEIM Waveform Viewer")
         self.resize(340, 680)
 
-        #  runtime state
-        self.output_blocks  = []     
-        self.data           = None  
-        self.labels         = []     
-        self.x_col          = None  
-        self.y_left_rows    = []     
-        self.y_right_rows   = []     
-        self.line_styles    = []     
-        self.open_windows   = []     
+        self.output_blocks  = []     # list[OutputBlock] from gseim_io
+        self.data           = None   # 2D numpy array of the active .dat
+        self.labels         = []     # column names matching self.data's columns
+        self.x_col          = None   # index of the chosen X column
+        self.y_left_rows    = []     # indices of Y-left columns
+        self.y_right_rows   = []     # indices of Y-right columns
+        self.line_styles    = []     # list[LineStyling], one per column
+        self.open_windows   = []     # keep references so windows stay alive
 
-        #  derived-feature file paths
         self.file_fourier  = ""
         self.file_thd      = ""
         self.file_avg      = ""
         self.file_rms      = ""
         self.file_power    = ""
 
-        #  settings objects (one per concern)
         self.title    = TitleSettings()
         self.grid     = GridSettings()
         self.axes     = AxesSettings()
@@ -1019,7 +1118,6 @@ class MainWindow(QMainWindow):
         self.ticks_y1 = TickSettings()
         self.ticks_y2 = TickSettings()
 
-        #  popup windows (created once, shown/hidden as needed) 
         self.popup_line    = LinePropPopup(self)
         self.popup_multi   = MultiPlotPopup(self)
         self.popup_fourier = FourierPopup(self)
@@ -1032,7 +1130,6 @@ class MainWindow(QMainWindow):
 
         self._build_ui()
 
-    #  UI construction 
 
     def _build_ui(self):
         root = QWidget()
@@ -1081,35 +1178,57 @@ class MainWindow(QMainWindow):
         self.y_table.setMaximumHeight(180)
         self.y_table.itemChanged.connect(self._y_changed)
         layout.addWidget(self.y_table)
-        self._suppress_y = False 
+        self._suppress_y = False   # guard against recursive signals
+
+        self.enable_checks = {}   # label -> (checkbox, settings_obj, attr_name)
 
         btn_grid = QWidget()
         btn_grid_layout = QtWidgets.QGridLayout(btn_grid)
         btn_grid_layout.setSpacing(4)
         settings_buttons = [
-            ("Line style",  self.popup_line.show),
-            ("Axes",        self.popup_axes.show),
-            ("Legend",      self.popup_legend.show),
-            ("Grid",        self.popup_grid.show),
-            ("Title",       self.popup_title.show),
-            ("Multi-plot",  self.popup_multi.show),
-            ("Fourier",     self.popup_fourier.show),
-            ("Avg / RMS",   self.popup_avgrms.show),
-            ("Power",       self.popup_power.show),
+            ("Line style",  self.popup_line.show,    None,            None),
+            ("Axes",        self.popup_axes.show,    None,            None),
+            ("Legend",      self.popup_legend.show,  None,            None),
+            ("Grid",        self.popup_grid.show,    self.grid,       "enabled"),
+            ("Title",       self.popup_title.show,   self.title,      "enabled"),
+            ("Multi-plot",  self.popup_multi.show,    self.multiplot, "enabled"),
+            ("Fourier",     self.popup_fourier.show,  self.fourier,   "enabled"),
+            ("Avg / RMS",   self.popup_avgrms.show,   None,            None),
+            ("Power",       self.popup_power.show,    self.power,     "enabled"),
         ]
-        for i, (label, slot) in enumerate(settings_buttons):
+        for i, (label, slot, obj, attr) in enumerate(settings_buttons):
+            row = QWidget()
+            row_layout = QHBoxLayout(row)
+            row_layout.setContentsMargins(0, 0, 0, 0)
+            if obj is not None:
+                cb = QCheckBox()
+                cb.setChecked(getattr(obj, attr))
+                cb.toggled.connect(
+                    lambda checked, lbl=label: self._toggle_enabled(lbl, checked))
+                self.enable_checks[label] = (cb, obj, attr)
+                row_layout.addWidget(cb)
             b = QPushButton(label)
             b.clicked.connect(slot)
-            btn_grid_layout.addWidget(b, i // 2, i % 2)
+            row_layout.addWidget(b)
+            btn_grid_layout.addWidget(row, i // 2, i % 2)
         layout.addWidget(btn_grid)
+
+        # Whenever a popup's settings are applied, refresh the checkboxes
+        # so they always reflect the real current state.
+        for popup in (self.popup_grid, self.popup_title, self.popup_multi,
+                      self.popup_fourier, self.popup_power):
+            popup.apply_btn.clicked.connect(self._sync_enable_checks)
+            popup.ok_btn.clicked.connect(self._sync_enable_checks)
 
         # Plot button
         self.plot_btn = QPushButton("Plot")
+        self.plot_btn.setMinimumHeight(60)
+        
         self.plot_btn.setEnabled(False)
         self.plot_btn.clicked.connect(self._plot)
-        layout.addWidget(self.plot_btn)
+        self.plot_btn.setFixedSize(160, 45)
+        layout.addWidget(self.plot_btn, alignment=QtCore.Qt.AlignmentFlag.AlignHCenter)
 
-    #  file loading 
     def _load_in_file(self):
         path, _ = QFileDialog.getOpenFileName(
             self, "Open GSEIM project file", "", "GSEIM projects (*.in)")
@@ -1132,6 +1251,7 @@ class MainWindow(QMainWindow):
         for b in blocks:
             self.output_list.addItem(QListWidgetItem(b.dat_filename))
 
+        # Reset all derived-feature flags when a new project is loaded
         self.fourier.enabled  = False
         self.avgrms.avg = self.avgrms.rms = False
         self.power.enabled    = False
@@ -1194,12 +1314,52 @@ class MainWindow(QMainWindow):
 
         self.plot_btn.setEnabled(True)
 
-    #  selection handlers 
+ 
     def _x_changed(self, row):
         self.x_col = row if row >= 0 else None
 
+    def _toggle_enabled(self, label, checked):
+        cb, obj, attr = self.enable_checks[label]
+
+        if not checked:
+            setattr(obj, attr, False)
+            return
+
+        if label == "Multi-plot" and not self.multiplot.panels:
+            QMessageBox.warning(self, "Multi-Plot",
+                "Configure your plots in the Multi-plot popup first.")
+            cb.setChecked(False); return
+
+        if label == "Fourier":
+            if self.x_col != 0:
+                QMessageBox.warning(self, "Fourier", "X axis must be 'time' for Fourier analysis.")
+                cb.setChecked(False); return
+            if self.fourier.t_start >= self.fourier.t_end:
+                QMessageBox.warning(self, "Fourier",
+                    "Set a valid t start / t end in the Fourier popup first.")
+                cb.setChecked(False); return
+            self._enforce_fourier_single_y()
+
+        if label == "Power":
+            if self.power.v_name not in self.labels or self.power.i_name not in self.labels:
+                QMessageBox.warning(self, "Power",
+                    "Pick voltage/current columns in the Power popup first.")
+                cb.setChecked(False); return
+            if self.power.period <= 0:
+                QMessageBox.warning(self, "Power",
+                    "Set a positive period in the Power popup first.")
+                cb.setChecked(False); return
+
+        setattr(obj, attr, True)
+
+    def _sync_enable_checks(self):
+        """Refresh every main-window checkbox to match the real current state."""
+        for cb, obj, attr in self.enable_checks.values():
+            cb.blockSignals(True)
+            cb.setChecked(getattr(obj, attr))
+            cb.blockSignals(False)
+
     def _y_changed(self, item):
-        """Keep L and R mutually exclusive per row."""
         if self._suppress_y or item.column() not in (0, 1):
             return
         if item.checkState() == Checked:
@@ -1208,6 +1368,14 @@ class MainWindow(QMainWindow):
             if other and other.checkState() == Checked:
                 self._suppress_y = True
                 other.setCheckState(Unchecked)
+                self._suppress_y = False
+
+            if self.fourier.enabled:
+                self._suppress_y = True
+                for r in range(self.y_table.rowCount()):
+                    if r != item.row():
+                        self.y_table.item(r, 0).setCheckState(Unchecked)
+                        self.y_table.item(r, 1).setCheckState(Unchecked)
                 self._suppress_y = False
 
         # Rebuild index lists
@@ -1221,7 +1389,22 @@ class MainWindow(QMainWindow):
             elif r_item and r_item.checkState() == Checked:
                 self.y_right_rows.append(r)
 
-    #  derived-feature computations 
+    def _enforce_fourier_single_y(self):
+        all_y = self.y_left_rows + self.y_right_rows
+        if len(all_y) <= 1:
+            return
+        keep = all_y[0]
+        self._suppress_y = True
+        for r in range(self.y_table.rowCount()):
+            if r != keep:
+                self.y_table.item(r, 0).setCheckState(Unchecked)
+                self.y_table.item(r, 1).setCheckState(Unchecked)
+        self._suppress_y = False
+        self.y_left_rows  = [keep] if keep in self.y_left_rows else []
+        self.y_right_rows = [keep] if keep in self.y_right_rows else []
+        QMessageBox.information(self, "Fourier",
+            "Fourier only supports one Y variable at a time — kept the first one selected.")
+
 
     def _run_fourier(self):
         """Compute Fourier harmonics for all selected Y columns, save to files."""
@@ -1264,6 +1447,7 @@ class MainWindow(QMainWindow):
 
         xs = [self.data[:, col] for col in all_y]
 
+        # These lists will hold [time, val_col0, val_col1, ...] per period
         t_out = []
         x_avg = [[] for _ in range(n_x)]
         x_rms = [[] for _ in range(n_x)]
@@ -1324,7 +1508,6 @@ class MainWindow(QMainWindow):
                     row = "%11.4E" % tv + "".join(" %11.4E" % x_rms[j][i] for j in range(n_x))
                     fp.write(row+"\n")
 
-
     def _run_power(self):
         """Compute per-period power quantities, save to a file."""
         if self.data is None: return
@@ -1376,10 +1559,21 @@ class MainWindow(QMainWindow):
                 fp.write("%11.4E" % t_start_k + vals + "\n")
                 fp.write("%11.4E" % t_end_k   + vals + "\n")
 
-    #  plot button 
-
     def _plot(self):
         if self.data is None: return
+
+        settings = dict(axes=self.axes, grid=self.grid,
+                        title=self.title, legend=self.legend)
+
+        
+        if self.multiplot.enabled:
+            if not self.multiplot.panels:
+                QMessageBox.information(self, "Multi-Plot",
+                    "Configure your plots in the Multi-plot popup first."); return
+            win = MultiPlotWindow(self.data, self.labels, self.line_styles,
+                                  self.multiplot.panels, settings)
+            win.show(); self.open_windows.append(win); return
+
         if self.x_col is None:
             QMessageBox.information(self, "Plot", "Pick an X axis column."); return
         if not self.y_left_rows and not self.y_right_rows:
@@ -1388,35 +1582,25 @@ class MainWindow(QMainWindow):
         x       = self.data[:, self.x_col]
         x_label = self.labels[self.x_col]
 
-        settings = dict(axes=self.axes, grid=self.grid,
-                        title=self.title, legend=self.legend)
-
-        #  power mode: special 3-subplot window 
+        
         if self.power.enabled and self.file_power:
             self._plot_power(x, x_label, settings); return
 
-        #  fourier mode: bar chart of harmonics 
+       
         if self.fourier.enabled and self.file_fourier:
             self._plot_fourier(x_label, settings); return
 
-        #  collect series 
+        
         left_series  = [(self.data[:, r], self.line_styles[r]) for r in self.y_left_rows]
         right_series = [(self.data[:, r], self.line_styles[r]) for r in self.y_right_rows]
 
-        # Overlay avg/rms as dashed lines if enabled
+        
         if (self.avgrms.avg or self.avgrms.rms) and self.data is not None:
             self._run_avgrms()
             left_series, right_series = self._inject_avgrms(
                 left_series, right_series)
 
-        #  multi-plot: stacked subplots 
-        if self.multiplot.enabled:
-            all_series = ([(y, s, "L") for y, s in left_series] +
-                          [(y, s, "R") for y, s in right_series])
-            win = MultiPlotWindow(x, x_label, all_series, settings)
-        else:
-            win = PlotWindow(x, x_label, left_series, right_series, settings)
-
+        win = PlotWindow(x, x_label, left_series, right_series, settings)
         win.show()
         self.open_windows.append(win)
 
@@ -1461,7 +1645,7 @@ class MainWindow(QMainWindow):
     def _plot_fourier(self, x_label, settings):
         """Open a window showing Fourier harmonics as bar charts."""
         data_f = np.loadtxt(self.file_fourier)
-        thd = np.atleast_1d(np.loadtxt(self.file_thd))
+        thd    = np.atleast_1d(np.loadtxt(self.file_thd))  # always a 1D array
         all_y  = self.y_left_rows + self.y_right_rows
         n      = len(all_y)
 
@@ -1471,6 +1655,7 @@ class MainWindow(QMainWindow):
         canvas = FigureCanvas(fig)
         for idx, col in enumerate(all_y):
             ax = fig.add_subplot(n, 1, idx+1)
+            ax.set_axisbelow(True)
             ax.bar(data_f[:, 0], data_f[:, idx+1], width=0.5,
                    color=self.line_styles[col].color)
             ax.set_xlabel("Harmonic index")
@@ -1500,9 +1685,9 @@ class MainWindow(QMainWindow):
 
         win = QMainWindow()
         win.setWindowTitle("Power Analysis")
-        fig = Figure(figsize=(7, 9))
+        fig = Figure(figsize=(7, 9), tight_layout=True)
         canvas = FigureCanvas(fig)
-        fig.subplots_adjust(hspace=0.0)
+        fig.subplots_adjust(hspace=0.05)
 
         ax1 = fig.add_subplot(3, 1, 1)
         ax1.plot(x, voltage, color="dodgerblue",  label=p.v_name)
