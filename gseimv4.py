@@ -223,6 +223,7 @@ class AxesSettings:
     x_sn_lo: int   = -5     # scientific notation kicks in below 10^x_sn_lo
     x_sn_hi: int   =  5     #  ... or above 10^x_sn_hi
     x_sn:    bool  = True   # use scientific notation at all?
+    x_multiplier: float = 1.0 
     # Left Y axis
     y_scale: str   = "linear"
     y_label: str   = ""
@@ -790,6 +791,8 @@ class AxesPopup(BasePopup):
         self.y2_label = QLineEdit()
         self.y2_scale = QComboBox(); self.y2_scale.addItems(["linear", "log"])
         self.y2_min   = QLineEdit(); self.y2_max = QLineEdit()
+        self.x_multiplier = QLineEdit("1.0")
+        self.content_layout.addRow("X multiplier:", self.x_multiplier)
 
         row("X label:",         self.x_label)
         row("X scale:",         self.x_scale)
@@ -812,6 +815,7 @@ class AxesPopup(BasePopup):
         self.y_min.setText(a.y_min);     self.y_max.setText(a.y_max)
         self.y2_label.setText(a.y_label2); self.y2_scale.setCurrentText(a.y_scale2)
         self.y2_min.setText(a.y_min2);   self.y2_max.setText(a.y_max2)
+        self.x_multiplier.setText(str(a.x_multiplier))
 
     def apply(self):
         a = self.main_win.axes
@@ -821,7 +825,10 @@ class AxesPopup(BasePopup):
         a.y_min   = self.y_min.text();   a.y_max   = self.y_max.text()
         a.y_label2 = self.y2_label.text(); a.y_scale2 = self.y2_scale.currentText()
         a.y_min2  = self.y2_min.text();  a.y_max2  = self.y2_max.text()
-
+        try:
+            a.x_multiplier = float(self.x_multiplier.text())
+        except ValueError:
+            a.x_multiplier = 1.0
 
 class TitlePopup(BasePopup):
     """Set the plot title text, alignment, and whether to show it at all."""
@@ -893,6 +900,7 @@ class PlotWindow(QMainWindow):
                  settings,      # dict holding all the settings objects
                  parent=None):
         super().__init__(parent)
+        self._x_multiplier = settings["axes"].x_multiplier
 
         title_parts = [s.label or lbl
                        for _, s in left_series + right_series
@@ -911,10 +919,13 @@ class PlotWindow(QMainWindow):
         ci = 0
         collected_lines = []
         collected_labels = []
-
+        
+        a = settings["axes"]
+        x_scaled = x * a.x_multiplier
+        ax.ticklabel_format(axis='x', style='sci', scilimits=(-2, 2), useMathText=True)
         for y, style in left_series:
             ln, = ax.plot(
-                x, y,
+                x_scaled, y,
                 color     = style.color,
                 linestyle = style.line_style,
                 linewidth = style.width,
@@ -932,7 +943,7 @@ class PlotWindow(QMainWindow):
         for y, style in right_series:
             ax2.set_visible(True)
             ln, = ax2.plot(
-                x, y,
+                x_scaled, y,
                 color     = style.color,
                 linestyle = style.line_style,
                 linewidth = style.width,
@@ -953,6 +964,7 @@ class PlotWindow(QMainWindow):
         ax.set_xscale(a.x_scale)
         if a.x_min: ax.set_xlim(left=float(a.x_min))
         if a.x_max: ax.set_xlim(right=float(a.x_max))
+        ax.ticklabel_format(axis='both', style='sci', scilimits=(-2, 2), useMathText=True)
 
         if left_series:
             ax.set_yscale(a.y_scale)
@@ -1008,9 +1020,10 @@ class PlotWindow(QMainWindow):
             current = ln.get_alpha()
             current = 1.0 if current is None else current
             ln.set_alpha(max(current * 0.6, 0.08))
-
+        new_x_scaled = new_x * self._x_multiplier
+        self.ax.ticklabel_format(axis="x", style="sci", scilimits=(-2, 2), useMathText=True)
         for y, style in new_left_series:
-            ln, = self.ax.plot(new_x, y,
+            ln, = self.ax.plot(new_x_scaled, y,
                                color=style.color, linestyle=style.line_style,
                                linewidth=style.width, drawstyle=style.draw_style,
                                marker=style.marker or None, markersize=style.marker_size,
@@ -1019,7 +1032,7 @@ class PlotWindow(QMainWindow):
 
         for y, style in new_right_series:
             self.ax2.set_visible(True)
-            ln, = self.ax2.plot(new_x, y,
+            ln, = self.ax2.plot(new_x_scaled, y,
                                 color=style.color, linestyle=style.line_style,
                                 linewidth=style.width, drawstyle=style.draw_style,
                                 marker=style.marker or None, markersize=style.marker_size,
@@ -1061,8 +1074,9 @@ class MultiPlotWindow(QMainWindow):
             if all_time and shared_ax is None:
                 shared_ax = ax
 
-            x = data[:, panel.x_col]
-
+            x = data[:, panel.x_col] * self.settings["axes"].x_multiplier
+            ax.ticklabel_format(axis="x", style="sci", scilimits=(-2, 2), useMathText=True)
+            ax.ticklabel_format(axis="y", style="sci", scilimits=(-2, 2), useMathText=True)
             collected_lines, collected_labels = [], []
             for col in panel.y_left:
                 style = line_styles[col]
@@ -1153,7 +1167,7 @@ class MultiPlotWindow(QMainWindow):
                 ln.set_alpha(max(cur * 0.6, 0.08))
 
         # plot new left-axis lines
-            x = new_data[:, panel.x_col]
+            x = new_data[:, panel.x_col]* self.settings["axes"].x_multiplier
             for col in panel.y_left:
                 style = self._panel_styles[col]
                 ln, = ax.plot(x, new_data[:, col],
@@ -1174,11 +1188,6 @@ class MultiPlotWindow(QMainWindow):
                     self._panel_lines[i].append(ln)
                     self._panel_labels[i].append(style.label)
 
-            ax.relim()
-            ax.autoscale_view()
-            if ax2:
-                ax2.relim()
-                ax2.autoscale_view()
             ax.legend(self._panel_lines[i], self._panel_labels[i],
                   loc="best", fontsize=9)
 
@@ -1186,7 +1195,6 @@ class MultiPlotWindow(QMainWindow):
 
 
 class MainWindow(QMainWindow):
-
     COLOR_SET = ["royalblue","tomato","green","mediumorchid",
                  "crimson","lightseagreen","peru","palevioletred","dimgrey"]
 
@@ -1326,15 +1334,19 @@ class MainWindow(QMainWindow):
 
         # Plot button
         self.plot_btn = QPushButton("Plot")
+        self.plot_btn.setMinimumHeight(60)
         self.plot_btn.setEnabled(False)
         self.plot_btn.clicked.connect(self._plot)
-        layout.addWidget(self.plot_btn)
+        self.plot_btn.setFixedSize(160, 45)
+        layout.addWidget(self.plot_btn, alignment=QtCore.Qt.AlignmentFlag.AlignHCenter)
 
         self.replottable_windows = []  
         self.replot_btn = QPushButton("Replot")
+        self.replot_btn.setMinimumHeight(60)
+        self.replot_btn.setFixedSize(160, 45)
         self.replot_btn.setEnabled(False)
         self.replot_btn.clicked.connect(self._replot)
-        layout.addWidget(self.replot_btn)
+        layout.addWidget(self.replot_btn, alignment=QtCore.Qt.AlignmentFlag.AlignHCenter)
 
 
     def _load_in_file(self):
