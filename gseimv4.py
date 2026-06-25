@@ -1,10 +1,11 @@
-
 import sys
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
-
 import numpy as np
+import copy
+
+os.environ.setdefault("QT_QPA_PLATFORM", "xcb")
 
 try:
     from PyQt6 import QtCore, QtWidgets
@@ -73,12 +74,6 @@ class TrimmedToolbar(NavToolbar):
 
 
 def fourier_coeff(t, x, t_start, t_end, n_fourier):
-    """
-    Compute the first n_fourier Fourier harmonic magnitudes of signal x(t)
-    over the window [t_start, t_end], plus the THD (Total Harmonic Distortion).
-    Uses trapezoidal integration – same algorithm as the original code.
-    Returns (coeff_list, thd_value).
-    """
     coeff              = [0.0] * n_fourier
     sum_fourier_real   = [0.0] * n_fourier
     sum_fourier_imag   = [0.0] * n_fourier
@@ -140,7 +135,7 @@ def fourier_coeff(t, x, t_start, t_end, n_fourier):
         coeff[i] = sum_fourier_mag[i]
 
     arg1 = 2.0*(sum_rms_1/T) - 2.0*coeff[0]**2 - coeff[1]**2
-    thd  = np.sqrt(max(arg1, 0.0)) / coeff[1]   # max(...,0) avoids sqrt of tiny negatives
+    thd  = np.sqrt(max(arg1, 0.0)) / coeff[1]   
     return coeff, thd
 
 
@@ -225,8 +220,8 @@ class AxesSettings:
     x_label: str   = ""
     x_min:   str   = ""     # stored as strings so empty = auto-range
     x_max:   str   = ""
-    x_sn_lo: int   = -3     # scientific notation kicks in below 10^x_sn_lo
-    x_sn_hi: int   =  3     #  ... or above 10^x_sn_hi
+    x_sn_lo: int   = -5     # scientific notation kicks in below 10^x_sn_lo
+    x_sn_hi: int   =  5     #  ... or above 10^x_sn_hi
     x_sn:    bool  = True   # use scientific notation at all?
     # Left Y axis
     y_scale: str   = "linear"
@@ -1055,7 +1050,12 @@ class MultiPlotWindow(QMainWindow):
         all_time = all(p.x_col == 0 for p in panels)   # column 0 is 'time' by convention
 
         axes = []
+        ax2s=[]
+        panel_lines=[]
+        panel_labels=[]
         shared_ax = None
+
+        
         for i, panel in enumerate(panels):
             ax = self.fig.add_subplot(n, 1, i+1, sharex=shared_ax if all_time else None)
             if all_time and shared_ax is None:
@@ -1076,18 +1076,24 @@ class MultiPlotWindow(QMainWindow):
             if panel.y_left:
                 ax.set_ylabel(labels[panel.y_left[0]] if len(panel.y_left) == 1 else "value")
 
+            current_ax2 = None
+
             if panel.y_right:
-                ax2 = ax.twinx()
+                current_ax2 = ax.twinx()
                 for col in panel.y_right:
                     style = line_styles[col]
-                    ln, = ax2.plot(x, data[:, col],
-                                   color=style.color, linestyle=style.line_style,
-                                   linewidth=style.width, drawstyle=style.draw_style,
+                    ln, = current_ax2.plot(x, data[:, col],
+                                           color=style.color, linestyle=style.line_style,
+                                           linewidth=style.width, drawstyle=style.draw_style,
                                    marker=style.marker or None, markersize=style.marker_size,
                                    label=style.label)
                     collected_lines.append(ln); collected_labels.append(style.label)
-                ax2.set_yscale(panel.right_scale)
-                ax2.set_ylabel(labels[panel.y_right[0]] if len(panel.y_right) == 1 else "value")
+                current_ax2.set_yscale(panel.right_scale)
+                current_ax2.set_ylabel(labels[panel.y_right[0]] if len(panel.y_right) == 1 else "value")
+            
+            ax2s.append(current_ax2)
+            panel_lines.append(collected_lines)
+            panel_labels.append(collected_labels)
 
             ax.set_axisbelow(True)
             g = settings["grid"]
@@ -1107,6 +1113,18 @@ class MultiPlotWindow(QMainWindow):
 
             axes.append(ax)
 
+
+        self.panels = panels
+        self._panel_styles = line_styles
+        self.axes = axes
+        self.ax2s = ax2s
+
+        self.settings = settings
+        self._panel_axes = axes
+        self._panel_ax2s = ax2s
+        self._panel_lines = panel_lines
+        self._panel_labels = panel_labels
+
         if all_time and axes:
             axes[-1].set_xlabel(labels[0])
 
@@ -1122,6 +1140,49 @@ class MultiPlotWindow(QMainWindow):
         self.addToolBar(TrimmedToolbar(self.canvas, self))
         self.resize(720, 300 * n)
 
+    def replot(self, new_data):
+        for i, panel in enumerate(self.panels):
+            ax  = self._panel_axes[i]
+            ax2 = self._panel_ax2s[i]   
+
+        # fade all existing lines on this subplot
+            all_lines = ax.get_lines() + (ax2.get_lines() if ax2 else [])
+            for ln in all_lines:
+                cur = ln.get_alpha()
+                cur = 1.0 if cur is None else cur
+                ln.set_alpha(max(cur * 0.6, 0.08))
+
+        # plot new left-axis lines
+            x = new_data[:, panel.x_col]
+            for col in panel.y_left:
+                style = self._panel_styles[col]
+                ln, = ax.plot(x, new_data[:, col],
+          color=style.color, linestyle=style.line_style,
+          linewidth=style.width, marker=style.marker or None,
+          markersize=style.marker_size, label=style.label)
+                self._panel_lines[i].append(ln)
+                self._panel_labels[i].append(style.label)
+
+        # plot new right-axis lines
+            if panel.y_right and ax2:
+                for col in panel.y_right:
+                    style = self._panel_styles[col]
+                    ln, = ax2.plot(x, new_data[:, col],
+           color=style.color, linestyle=style.line_style,
+           linewidth=style.width, marker=style.marker or None,
+           markersize=style.marker_size, label=style.label)
+                    self._panel_lines[i].append(ln)
+                    self._panel_labels[i].append(style.label)
+
+            ax.relim()
+            ax.autoscale_view()
+            if ax2:
+                ax2.relim()
+                ax2.autoscale_view()
+            ax.legend(self._panel_lines[i], self._panel_labels[i],
+                  loc="best", fontsize=9)
+
+        self.canvas.draw()
 
 
 class MainWindow(QMainWindow):
@@ -1140,8 +1201,9 @@ class MainWindow(QMainWindow):
         self.x_col          = None   # index of the chosen X column
         self.y_left_rows    = []     # indices of Y-left columns
         self.y_right_rows   = []     # indices of Y-right columns
-        self.line_styles    = []     # list[LineStyling], one per column
+        self._panel_styles = []     # list[LineStyling], one per column
         self.open_windows   = []     # keep references so windows stay alive
+        self.popup_open_count = 0    # used to cascade plot windows on the left
 
         self.file_fourier  = ""
         self.file_thd      = ""
@@ -1363,6 +1425,16 @@ class MainWindow(QMainWindow):
 
     def _x_changed(self, row):
         self.x_col = row if row >= 0 else None
+
+    def _next_popup_position(self):
+        screen = QApplication.primaryScreen().availableGeometry()
+        margin = 40     # gap from the screen edge for the very first window
+        step   = 45     # how far each new window shifts from the last
+        max_steps = 10  # wrap back to the start after this many cascades
+
+        n = self.popup_open_count % max_steps
+        self.popup_open_count += 1
+        return screen.left() + margin + step * n, screen.top() + margin + step * n
 
     def _toggle_enabled(self, label, checked):
         cb, obj, attr = self.enable_checks[label]
@@ -1611,15 +1683,21 @@ class MainWindow(QMainWindow):
         settings = dict(axes=self.axes, grid=self.grid,
                         title=self.title, legend=self.legend)
 
-        # ── multi-plot: fully self-contained, configured in its own popup ───
         if self.multiplot.enabled:
             if not self.multiplot.panels:
                 QMessageBox.information(self, "Multi-Plot",
                     "Configure your plots in the Multi-plot popup first."); return
-            win = MultiPlotWindow(self.data, self.labels, self.line_styles,
-                                  self.multiplot.panels, settings)
-            win.show(); self.open_windows.append(win); return
-
+            win = MultiPlotWindow(self.data, self.labels, list(self.line_styles),
+                      list(self.multiplot.panels), settings)
+            win.dat_path = self.output_blocks[self.output_list.currentRow()].dat_path
+            x, y = self._next_popup_position()
+            win.move(x, y)
+            win.show()
+            self.open_windows.append(win); 
+            self.replottable_windows.append(win)
+            self.replot_btn.setEnabled(True)
+            return 
+                   
         if self.x_col is None:
             QMessageBox.information(self, "Plot", "Pick an X axis column."); return
         if not self.y_left_rows and not self.y_right_rows:
@@ -1643,14 +1721,16 @@ class MainWindow(QMainWindow):
                 left_series, right_series)
 
         win = PlotWindow(x, x_label, left_series, right_series, settings)
+        px, py = self._next_popup_position()
+        win.move(px, py)
         win.show()
         self.open_windows.append(win)
 
-        win.dat_path       = self.output_blocks[self.output_list.currentRow()].dat_path
+        win.dat_path = self.output_blocks[self.output_list.currentRow()].dat_path
         win.x_col          = self.x_col
         win.y_left_rows    = list(self.y_left_rows)
         win.y_right_rows   = list(self.y_right_rows)
-        win.line_styles    = self.line_styles
+        win.line_styles    = list(self.line_styles)
         self.replottable_windows.append(win)
         self.replot_btn.setEnabled(True)
 
@@ -1664,10 +1744,14 @@ class MainWindow(QMainWindow):
             except (FileNotFoundError, ValueError) as e:
                 QMessageBox.warning(self, "Replot", f"{win.windowTitle()}: {e}")
                 continue
-            new_x     = new_data[:, win.x_col]
-            new_left  = [(new_data[:, r], win.line_styles[r]) for r in win.y_left_rows]
-            new_right = [(new_data[:, r], win.line_styles[r]) for r in win.y_right_rows]
-            win.replot(new_x, new_left, new_right)
+
+            if isinstance(win, MultiPlotWindow):
+                win.replot(new_data)                          
+            else:
+                new_x     = new_data[:, win.x_col]
+                new_left  = [(new_data[:, r], win.line_styles[r]) for r in win.y_left_rows]
+                new_right = [(new_data[:, r], win.line_styles[r]) for r in win.y_right_rows]
+                win.replot(new_x, new_left, new_right)
 
     def _inject_avgrms(self, left_series, right_series):
         """Add avg/rms overlay lines as extra (dashed/dashdot) series."""
@@ -1733,6 +1817,8 @@ class MainWindow(QMainWindow):
         win.setCentralWidget(w)
         win.addToolBar(TrimmedToolbar(canvas, win))
         win.resize(720, 300*n)
+        x, y = self._next_popup_position()
+        win.move(x, y)
         win.show()
         self.open_windows.append(win)
 
@@ -1779,6 +1865,9 @@ class MainWindow(QMainWindow):
         win.setCentralWidget(w)
         win.addToolBar(TrimmedToolbar(canvas, win))
         win.resize(720, 700)
+
+        x, y = self._next_popup_position()
+        win.move(x, y)
         win.show()
         self.open_windows.append(win)
 
@@ -1786,6 +1875,9 @@ class MainWindow(QMainWindow):
 def main():
     app = QApplication(sys.argv)
     win = MainWindow()
+    screen = QApplication.primaryScreen().availableGeometry()
+    win.move(screen.right() - win.width(),
+             screen.top() + (screen.height() - win.height()) // 2)
     win.show()
     sys.exit(app.exec())
 
