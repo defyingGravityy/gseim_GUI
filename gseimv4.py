@@ -200,6 +200,7 @@ class FourierSettings:
 @dataclass
 class AvgRmsSettings:
     avg:    bool  = False
+    enabled: bool  = False
     rms:    bool  = False
     period: float = 0.0
 
@@ -753,6 +754,7 @@ class MultiPlotPopup(BasePopup):
             "Avg/RMS is not supported together with Multi-plot. Disabling Avg/RMS.")
             mw.avgrms.avg = False
             mw.avgrms.rms = False
+            mw.avgrms.enabled = False
 
         panels = []
         for block in self.panel_blocks:
@@ -861,8 +863,11 @@ class AvgRmsPopup(BasePopup):
             QMessageBox.warning(self, "Avg/RMS", "Period must be positive."); return
         if mw.x_col != 0:
             QMessageBox.warning(self, "Avg/RMS", "X axis must be 'time' for avg/rms."); return
+        
         a.period = T
+        a.enabled = True          # ← mark enabled now that everything is valid
         mw._run_avgrms()
+        mw._sync_enable_checks()
 
 
 class PowerPopup(BasePopup):
@@ -1431,6 +1436,14 @@ class MainWindow(QMainWindow):
 
         self._build_ui()
 
+    def closeEvent(self, event):
+        for win in self.open_windows:
+            win.close()
+        for popup in (self.popup_line, self.popup_multi, self.popup_fourier,
+                    self.popup_avgrms, self.popup_power, self.popup_grid,
+                    self.popup_axes, self.popup_title, self.popup_legend):
+            popup.close()
+        event.accept()
 
     def _build_ui(self):
         root = QWidget()
@@ -1493,7 +1506,7 @@ class MainWindow(QMainWindow):
             ("Title",       self.popup_title.show,   self.title,      "enabled"),
             ("Multi-plot",  self.popup_multi.show,    self.multiplot, "enabled"),
             ("Fourier",     self.popup_fourier.show,  self.fourier,   "enabled"),
-            ("Avg / RMS",   self.popup_avgrms.show,   None,            None),
+            ("Avg / RMS",   self.popup_avgrms.show,   self.avgrms,    "enabled"),
             ("Power",       self.popup_power.show,    self.power,     "enabled"),
         ]
         for i, (label, slot, obj, attr) in enumerate(settings_buttons):
@@ -1559,6 +1572,7 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Parse error", str(e)); return
 
         self.output_blocks = blocks
+        self.avgrms.avg = self.avgrms.rms = self.avgrms.enabled = False
         self.file_label.setText(path)
         self.output_list.clear()
         self._clear_columns()
@@ -1659,6 +1673,22 @@ class MainWindow(QMainWindow):
                 "Configure your plots in the Multi-plot popup first.")
             cb.setChecked(False); return
 
+        if label == "Avg / RMS":
+            if not (self.avgrms.avg or self.avgrms.rms):
+                QMessageBox.warning(self, "Avg / RMS",
+                    "Check at least one of 'avg' or 'rms' in the Avg/RMS popup first.")
+                cb.setChecked(False); return
+            if self.x_col != 0:
+                QMessageBox.warning(self, "Avg / RMS", "X axis must be 'time' for Avg/RMS analysis.")
+                cb.setChecked(False); return
+            if self.avgrms.period <= 0:
+                QMessageBox.warning(self, "Avg / RMS",
+                    "Set a positive period in the Avg/RMS popup first.")
+                cb.setChecked(False); return
+            if self.multiplot.enabled:
+                QMessageBox.warning(self, "Avg / RMS", "Avg/RMS not supported with Multi-plot.")
+                cb.setChecked(False); return
+                    
         if label == "Fourier":
             if self.x_col != 0:
                 QMessageBox.warning(self, "Fourier", "X axis must be 'time' for Fourier analysis.")
@@ -1945,7 +1975,7 @@ class MainWindow(QMainWindow):
             new_left  = list(left_series)
             new_right = list(right_series)
             if self.avgrms.avg and self.file_avg:
-                data_avg = np.loadtxt(self.file_avg)
+                data_avg = np.atleast_2d(np.loadtxt(self.file_avg)) 
                 t_avg = data_avg[:, 0]
                 for idx, col in enumerate(all_y):
                     y_avg = data_avg[:, idx+1]
@@ -1959,7 +1989,7 @@ class MainWindow(QMainWindow):
                     else:
                         new_right.append((t_avg, y_avg, s))
             if self.avgrms.rms and self.file_rms:
-                data_rms = np.loadtxt(self.file_rms)
+                data_rms = np.atleast_2d(np.loadtxt(self.file_rms)) 
                 t_rms = data_rms[:, 0]
                 for idx, col in enumerate(all_y):
                     y_rms = data_rms[:, idx+1]
