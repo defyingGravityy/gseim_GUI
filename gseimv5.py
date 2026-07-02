@@ -5,6 +5,8 @@ from pathlib import Path
 import numpy as np
 import copy
 
+from torch import layout
+
 os.environ.setdefault("QT_QPA_PLATFORM", "xcb")
 
 try:
@@ -442,158 +444,6 @@ class LinePropPopup(BasePopup):
         s.multi_scale = self.multi_scale_combo.currentText()
 
 
-# class MultiPlotPopup(BasePopup):
-#     def __init__(self, main_win):
-#         super().__init__("Multi-Plot")
-#         self.main_win = main_win
-#         self.resize(560, 600)
-#         self.panel_blocks = []   # list of dicts holding each panel's widgets
-
-#         self.enable_check = QCheckBox()
-#         self.content_layout.addRow("Enabled:", self.enable_check)
-
-#         n_row = QWidget()
-#         n_layout = QHBoxLayout(n_row)
-#         n_layout.setContentsMargins(0, 0, 0, 0)
-#         self.n_edit = QLineEdit("1")
-#         self.n_edit.setFixedWidth(50)
-#         set_btn = QPushButton("Set")
-#         set_btn.clicked.connect(lambda: self._rebuild_panels())
-#         n_layout.addWidget(self.n_edit)
-#         n_layout.addWidget(set_btn)
-#         self.content_layout.addRow("Number of plots:", n_row)
-
-#         self.panels_area = QScrollArea()
-#         self.panels_area.setWidgetResizable(True)
-#         self.panels_container = QWidget()
-#         self.panels_layout = QVBoxLayout(self.panels_container)
-#         self.panels_area.setWidget(self.panels_container)
-#         self.content_layout.addRow(self.panels_area)
-
-#     def _make_panel_block(self, index):
-#         box = QtWidgets.QGroupBox(f"Plot {index+1}")
-#         v = QVBoxLayout(box)
-
-#         v.addWidget(QLabel("X axis:"))
-#         x_list = QListWidget()
-#         x_list.setSelectionMode(SingleSelection)
-#         x_list.setMaximumHeight(80)
-#         v.addWidget(x_list)
-
-#         v.addWidget(QLabel("Y axis  (L = left,  R = right):"))
-#         y_table = QTableWidget(0, 3)
-#         y_table.setHorizontalHeaderLabels(["L", "R", "Variable"])
-#         h = y_table.horizontalHeader()
-#         h.setSectionResizeMode(0, ResizeToContents)
-#         h.setSectionResizeMode(1, ResizeToContents)
-#         h.setSectionResizeMode(2, StretchLast)
-#         y_table.setMaximumHeight(120)
-#         v.addWidget(y_table)
-
-#         scale_row = QWidget()
-#         sl = QHBoxLayout(scale_row)
-#         sl.setContentsMargins(0, 0, 0, 0)
-#         sl.addWidget(QLabel("Left scale:"))
-#         left_scale = QComboBox(); left_scale.addItems(["linear", "log"])
-#         sl.addWidget(left_scale)
-#         sl.addWidget(QLabel("Right scale:"))
-#         right_scale = QComboBox(); right_scale.addItems(["linear", "log"])
-#         sl.addWidget(right_scale)
-#         v.addWidget(scale_row)
-
-#         for lbl in self.main_win.labels:
-#             x_list.addItem(QListWidgetItem(lbl))
-#             row = y_table.rowCount()
-#             y_table.insertRow(row)
-#             for col in (0, 1):
-#                 item = QTableWidgetItem()
-#                 item.setFlags(UserCheckable | ItemEnabled)
-#                 item.setCheckState(Unchecked)
-#                 y_table.setItem(row, col, item)
-#             name_item = QTableWidgetItem(lbl)
-#             name_item.setFlags(ItemEnabled)
-#             y_table.setItem(row, 2, name_item)
-#         if x_list.count():
-#             x_list.setCurrentRow(0)
-
-#         def y_changed(item, table=y_table):
-#             if item.column() not in (0, 1):
-#                 return
-#             if item.checkState() == Checked:
-#                 other = table.item(item.row(), 1 - item.column())
-#                 if other and other.checkState() == Checked:
-#                     other.setCheckState(Unchecked)
-#         y_table.itemChanged.connect(y_changed)
-
-#         return {"box": box, "x_list": x_list, "y_table": y_table,
-#                 "left_scale": left_scale, "right_scale": right_scale}
-
-#     def _rebuild_panels(self, restore_from=None):
-#         try:
-#             n = max(1, int(self.n_edit.text()))
-#         except ValueError:
-#             n = 1
-#         self.n_edit.setText(str(n))
-
-#         while self.panels_layout.count():
-#             w = self.panels_layout.takeAt(0).widget()
-#             if w: w.setParent(None)
-#         self.panel_blocks = []
-
-#         for i in range(n):
-#             block = self._make_panel_block(i)
-#             self.panels_layout.addWidget(block["box"])
-#             self.panel_blocks.append(block)
-
-#             if restore_from and i < len(restore_from):
-#                 p = restore_from[i]
-#                 if 0 <= p.x_col < block["x_list"].count():
-#                     block["x_list"].setCurrentRow(p.x_col)
-#                 for r in p.y_left:
-#                     if r < block["y_table"].rowCount():
-#                         block["y_table"].item(r, 0).setCheckState(Checked)
-#                 for r in p.y_right:
-#                     if r < block["y_table"].rowCount():
-#                         block["y_table"].item(r, 1).setCheckState(Checked)
-#                 block["left_scale"].setCurrentText(p.left_scale)
-#                 block["right_scale"].setCurrentText(p.right_scale)
-
-#     def load_settings(self):
-#         mw = self.main_win
-#         self.enable_check.setChecked(mw.multiplot.enabled)
-#         self.n_edit.setText(str(mw.multiplot.n_plots or 1))
-#         self._rebuild_panels(restore_from=mw.multiplot.panels)
-
-#     def apply(self):
-#         mw = self.main_win
-#         mw.multiplot.enabled = self.enable_check.isChecked()
-#         if not mw.multiplot.enabled:
-#             return
-
-#         panels = []
-#         for block in self.panel_blocks:
-#             x_col = block["x_list"].currentRow()
-#             if x_col < 0:
-#                 QMessageBox.warning(self, "Multi-Plot", "Every plot needs an X axis selected.")
-#                 mw.multiplot.enabled = False; return
-#             y_left, y_right = [], []
-#             for r in range(block["y_table"].rowCount()):
-#                 if block["y_table"].item(r, 0).checkState() == Checked:
-#                     y_left.append(r)
-#                 elif block["y_table"].item(r, 1).checkState() == Checked:
-#                     y_right.append(r)
-#             if not y_left and not y_right:
-#                 QMessageBox.warning(self, "Multi-Plot", "Every plot needs at least one Y variable.")
-#                 mw.multiplot.enabled = False; return
-#             panels.append(MultiPlotPanel(
-#                 x_col=x_col, y_left=y_left, y_right=y_right,
-#                 left_scale=block["left_scale"].currentText(),
-#                 right_scale=block["right_scale"].currentText()))
-
-#         mw.multiplot.n_plots = len(panels)
-#         mw.multiplot.panels  = panels
-
-
 class MultiPlotPopup(BasePopup):
     def __init__(self, main_win):
         super().__init__("Multi-Plot")
@@ -776,6 +626,87 @@ class MultiPlotPopup(BasePopup):
         mw.multiplot.n_plots = len(panels)
         mw.multiplot.panels  = panels
 
+
+class SinglePlotPopup(BasePopup):
+    def __init__(self, main_win):
+        super().__init__("Single Plot Configuration")
+        self.main_win = main_win
+        self.resize(420, 700)
+
+        mw = main_win
+
+        # X axis picker
+        self.content_layout.addRow(QLabel("X axis:"))
+        self.x_list = QListWidget()
+        self.x_list.setSelectionMode(SingleSelection)
+        self.x_list.setMaximumHeight(140)
+        self.x_list.setSizePolicy(
+    QSizePolicy.Policy.Expanding,
+    QSizePolicy.Policy.Fixed)
+        self.x_list.currentRowChanged.connect(mw._x_changed)
+        self.content_layout.addRow(self.x_list)
+
+        # Y axis table
+        self.content_layout.addRow(QLabel("Y axis  (L = left axis,  R = right axis):"))
+        self.y_table = QTableWidget(0, 3)
+        self.y_table.setHorizontalHeaderLabels(["L", "R", "Variable"])
+        h = self.y_table.horizontalHeader()
+        h.setSectionResizeMode(0, ResizeToContents)
+        h.setSectionResizeMode(1, ResizeToContents)
+        h.setSectionResizeMode(2, StretchLast)
+        self.y_table.setSelectionMode(NoSelection)
+        self.y_table.setMaximumHeight(240)       
+
+        self.y_table.itemChanged.connect(mw._y_changed)
+        self.content_layout.addRow(self.y_table)
+
+        mw.x_list = self.x_list
+        mw.y_table = self.y_table
+
+        btn_grid = QWidget()
+        btn_grid_layout = QtWidgets.QGridLayout(btn_grid)
+        btn_grid_layout.setSpacing(4)
+        settings_buttons = [
+            ("Line style",  mw.popup_line.show,    None,            None),
+            ("Axes",        mw.popup_axes.show,    None,            None),
+            ("Legend",      mw.popup_legend.show,  None,            None),
+            ("Grid",        mw.popup_grid.show,    mw.grid,         "enabled"),
+            ("Title",       mw.popup_title.show,   mw.title,        "enabled"),
+            ("Fourier",     mw.popup_fourier.show, mw.fourier,      "enabled"),
+            ("Avg / RMS",   mw.popup_avgrms.show,  None,            None),
+            ("Power",       mw.popup_power.show,   mw.power,        "enabled"),
+        ]
+        for i, (label, slot, obj, attr) in enumerate(settings_buttons):
+            row = QWidget()
+            row_layout = QHBoxLayout(row)
+            row_layout.setContentsMargins(0, 0, 0, 0)
+            row_layout.setSpacing(2) 
+            b = QPushButton(label)
+            b.clicked.connect(slot)
+            if obj is not None:
+                cb = QCheckBox()
+                cb.setChecked(getattr(obj, attr))
+                cb.toggled.connect(
+                    lambda checked, lbl=label: mw._toggle_enabled(lbl, checked))
+                mw.enable_checks[label] = (cb, obj, attr)
+                row_layout.addWidget(cb)      # ← checkbox first
+                row_layout.addWidget(b) 
+            else:
+                row_layout.addWidget(b)
+                
+            row_layout.addStretch() 
+            btn_grid_layout.addWidget(row, i // 2, i % 2)
+            self.content_layout.addRow(btn_grid)
+
+        for popup in (mw.popup_grid, mw.popup_title,
+                      mw.popup_fourier, mw.popup_power):
+            popup.apply_btn.clicked.connect(mw._sync_enable_checks)
+            popup.ok_btn.clicked.connect(mw._sync_enable_checks)
+
+    def load_settings(self):
+        mw = self.main_win
+        mw._populate_columns()
+
 class FourierPopup(BasePopup):
     def __init__(self, main_win):
         super().__init__("Fourier Analysis")
@@ -815,7 +746,8 @@ class FourierPopup(BasePopup):
         f.n_fourier = int(self.n_edit.text() or "10")
         f.t_start   = t0
         f.t_end     = t1
-        mw._plot_fourier()
+        
+        mw._run_fourier()
 
 
 class AvgRmsPopup(BasePopup):
@@ -862,8 +794,16 @@ class AvgRmsPopup(BasePopup):
         if mw.x_col != 0:
             QMessageBox.warning(self, "Avg/RMS", "X axis must be 'time' for avg/rms."); return
         
+        t = mw.data[:, mw.x_col]
+        t_span = t[-1] - t[0]
+        if T > t_span:
+            QMessageBox.warning(self, "Avg/RMS",
+                f"Period ({T:g}) is longer than the simulated time span ({t_span:g}). "
+                "No complete period fits in the data.")
+            return
+
         a.period = T
-        a.enabled = True          # ← mark enabled now that everything is valid
+        a.enabled = True          
         mw._run_avgrms()
         mw._sync_enable_checks()
 
@@ -1392,7 +1332,7 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("GSEIM Waveform Viewer")
-        self.resize(340, 680)
+        self.resize(340, 400)
 
         self.output_blocks  = []     # list[OutputBlock] from gseim_io
         self.data           = None   # 2D numpy array of the active .dat
@@ -1431,7 +1371,9 @@ class MainWindow(QMainWindow):
         self.popup_axes    = AxesPopup(self)
         self.popup_title   = TitlePopup(self)
         self.popup_legend  = LegendPopup(self)
+        self.enable_checks = {}         
 
+        self.popup_single  = SinglePlotPopup(self)
         self._build_ui()
 
     def closeEvent(self, event):
@@ -1463,66 +1405,22 @@ class MainWindow(QMainWindow):
         layout.addWidget(QLabel("Output files:"))
         self.output_list = QListWidget()
         self.output_list.setSelectionMode(SingleSelection)
-        self.output_list.setMaximumHeight(100)
+        self.output_list.setMaximumHeight(50)
         self.output_list.currentRowChanged.connect(self._select_output_file)
         layout.addWidget(self.output_list)
 
         self.shape_label = QLabel("")
         layout.addWidget(self.shape_label)
 
-        # X axis picker
-        layout.addWidget(QLabel("X axis:"))
-        self.x_list = QListWidget()
-        self.x_list.setSelectionMode(SingleSelection)
-        self.x_list.setMaximumHeight(160)
-        self.x_list.currentRowChanged.connect(self._x_changed)
-        layout.addWidget(self.x_list)
+        
 
-        # Y axis table  (columns: L checkbox | R checkbox | variable name)
-        layout.addWidget(QLabel("Y axis  (L = left axis,  R = right axis):"))
-        self.y_table = QTableWidget(0, 3)
-        self.y_table.setHorizontalHeaderLabels(["L", "R", "Variable"])
-        h = self.y_table.horizontalHeader()
-        h.setSectionResizeMode(0, ResizeToContents)
-        h.setSectionResizeMode(1, ResizeToContents)
-        h.setSectionResizeMode(2, StretchLast)
-        self.y_table.setSelectionMode(NoSelection)
-        self.y_table.setMaximumHeight(180)
-        self.y_table.itemChanged.connect(self._y_changed)
-        layout.addWidget(self.y_table)
-        self._suppress_y = False   # guard against recursive signals
-        self.enable_checks = {}   # label -> (checkbox, settings_obj, attr_name)
+        self.single_btn = QPushButton("Single Plot Config")
+        self.single_btn.clicked.connect(self._open_single_config)
+        layout.addWidget(self.single_btn)
 
-        btn_grid = QWidget()
-        btn_grid_layout = QtWidgets.QGridLayout(btn_grid)
-        btn_grid_layout.setSpacing(4)
-        settings_buttons = [
-            ("Line style",  self.popup_line.show,    None,            None),
-            ("Axes",        self.popup_axes.show,    None,            None),
-            ("Legend",      self.popup_legend.show,  None,            None),
-            ("Grid",        self.popup_grid.show,    self.grid,       "enabled"),
-            ("Title",       self.popup_title.show,   self.title,      "enabled"),
-            ("Multi-plot",  self.popup_multi.show,    self.multiplot, "enabled"),
-            ("Fourier",     self.popup_fourier.show,  self.fourier,   "enabled"),
-            ("Avg / RMS",   self.popup_avgrms.show,   self.avgrms,    "enabled"),
-            ("Power",       self.popup_power.show,    self.power,     "enabled"),
-        ]
-        for i, (label, slot, obj, attr) in enumerate(settings_buttons):
-            row = QWidget()
-            row_layout = QHBoxLayout(row)
-            row_layout.setContentsMargins(0, 0, 0, 0)
-            if obj is not None:
-                cb = QCheckBox()
-                cb.setChecked(getattr(obj, attr))
-                cb.toggled.connect(
-                    lambda checked, lbl=label: self._toggle_enabled(lbl, checked))
-                self.enable_checks[label] = (cb, obj, attr)
-                row_layout.addWidget(cb)
-            b = QPushButton(label)
-            b.clicked.connect(slot)
-            row_layout.addWidget(b)
-            btn_grid_layout.addWidget(row, i // 2, i % 2)
-        layout.addWidget(btn_grid)
+        self.multi_btn = QPushButton("Multi-Plot Config")
+        self.multi_btn.clicked.connect(self.popup_multi.show)
+        layout.addWidget(self.multi_btn)
 
         # Whenever a popup's settings are applied, refresh the checkboxes
         # so they always reflect the real current state.
@@ -1547,6 +1445,9 @@ class MainWindow(QMainWindow):
         self.replot_btn.clicked.connect(self._replot)
         layout.addWidget(self.replot_btn, alignment=QtCore.Qt.AlignmentFlag.AlignHCenter)
 
+    def _open_single_config(self):
+        self.multiplot.enabled = False   
+        self.popup_single.show()
 
     def _load_in_file(self):
         # path, _ = QFileDialog.getOpenFileName(
@@ -1838,6 +1739,29 @@ class MainWindow(QMainWindow):
                     fp.write(row_start + "\n")
                     fp.write(row_end + "\n")
 
+    def _run_fourier(self):
+        if self.data is None:
+            return
+        f = self.fourier
+        all_y = self.y_left_rows + self.y_right_rows
+        if not all_y:
+            return
+        col = all_y[0]                      
+        t = self.data[:, self.x_col]
+        x = self.data[:, col]
+
+        coeff, thd = fourier_coeff(t, x, f.t_start, f.t_end, f.n_fourier)
+
+        base = str(self.output_blocks[self.output_list.currentRow()].dat_path)
+        self.file_fourier = base.replace(".dat", "_fourier.dat")
+        with open(self.file_fourier, "w") as fp:
+            for i, c in enumerate(coeff):
+                fp.write("%d %11.4E\n" % (i, c))
+
+        self.file_thd = base.replace(".dat", "_thd.dat")
+        with open(self.file_thd, "w") as fp:
+            fp.write("%11.4E\n" % thd)
+
     def _run_power(self):
         """Compute per-period power quantities, save to a file."""
         if self.data is None: return
@@ -1973,7 +1897,7 @@ class MainWindow(QMainWindow):
             new_left  = list(left_series)
             new_right = list(right_series)
             if self.avgrms.avg and self.file_avg:
-                data_avg = np.atleast_2d(np.loadtxt(self.file_avg)) 
+                data_avg = np.loadtxt(self.file_avg)
                 t_avg = data_avg[:, 0]
                 for idx, col in enumerate(all_y):
                     y_avg = data_avg[:, idx+1]
@@ -1987,7 +1911,7 @@ class MainWindow(QMainWindow):
                     else:
                         new_right.append((t_avg, y_avg, s))
             if self.avgrms.rms and self.file_rms:
-                data_rms = np.atleast_2d(np.loadtxt(self.file_rms)) 
+                data_rms = np.loadtxt(self.file_rms)
                 t_rms = data_rms[:, 0]
                 for idx, col in enumerate(all_y):
                     y_rms = data_rms[:, idx+1]
